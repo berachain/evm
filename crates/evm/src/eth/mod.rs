@@ -1,7 +1,7 @@
 //! Ethereum EVM implementation.
 
 use crate::{env::EvmEnv, evm::EvmFactory, precompiles::PrecompilesMap, Database, Evm};
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::{Address, Bytes, TxKind};
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut},
@@ -104,6 +104,9 @@ impl<DB: Database, I, PRECOMPILE> DerefMut for EthEvm<DB, I, PRECOMPILE> {
     }
 }
 
+/// Transaction type identifier for Berachain POL transactions
+pub const POL_TX_TYPE: u8 = 126;
+
 impl<DB, I, PRECOMPILE> Evm for EthEvm<DB, I, PRECOMPILE>
 where
     DB: Database,
@@ -130,6 +133,12 @@ where
         &mut self,
         tx: Self::Tx,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
+        if tx.tx_type == POL_TX_TYPE && self.inspect {
+            return match tx.kind {
+                TxKind::Create => Err(EVMError::Custom("pol tx cannot be create".into())),
+                TxKind::Call(to) => self.inspect_system_call(tx.caller, to, tx.data),
+            };
+        }
         if self.inspect {
             self.inner.inspect_tx(tx)
         } else {
