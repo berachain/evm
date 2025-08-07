@@ -1,7 +1,7 @@
 //! Ethereum EVM implementation.
 
 use crate::{env::EvmEnv, evm::EvmFactory, precompiles::PrecompilesMap, Database, Evm};
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::{Address, Bytes, TxKind};
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut},
@@ -14,7 +14,8 @@ use revm::{
     interpreter::{interpreter::EthInterpreter, InterpreterResult},
     precompile::{PrecompileSpecId, Precompiles},
     primitives::hardfork::SpecId,
-    Context, ExecuteEvm, InspectEvm, Inspector, MainBuilder, MainContext, SystemCallEvm,
+    Context, ExecuteEvm, InspectEvm, InspectSystemCallEvm, Inspector, MainBuilder, MainContext,
+    SystemCallEvm,
 };
 
 mod block;
@@ -103,6 +104,9 @@ impl<DB: Database, I, PRECOMPILE> DerefMut for EthEvm<DB, I, PRECOMPILE> {
     }
 }
 
+/// Transaction type identifier for Berachain POL transactions
+pub const POL_TX_TYPE: u8 = 126;
+
 impl<DB, I, PRECOMPILE> Evm for EthEvm<DB, I, PRECOMPILE>
 where
     DB: Database,
@@ -129,11 +133,26 @@ where
         &mut self,
         tx: Self::Tx,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
+        if tx.tx_type == POL_TX_TYPE && self.inspect {
+            return match tx.kind {
+                TxKind::Create => Err(EVMError::Custom("pol tx cannot be create".into())),
+                TxKind::Call(to) => self.inspect_system_call(tx.caller, to, tx.data),
+            };
+        }
         if self.inspect {
             self.inner.inspect_tx(tx)
         } else {
             self.inner.transact(tx)
         }
+    }
+
+    fn inspect_system_call(
+        &mut self,
+        caller: Address,
+        contract: Address,
+        data: Bytes,
+    ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
+        self.inner.inspect_system_call_with_caller(caller, contract, data)
     }
 
     fn transact_system_call(
@@ -142,7 +161,7 @@ where
         contract: Address,
         data: Bytes,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
-        self.inner.transact_system_call_with_caller_finalize(caller, contract, data)
+        self.inner.system_call_with_caller(caller, contract, data)
     }
 
     fn finish(self) -> (Self::DB, EvmEnv<Self::Spec>) {
